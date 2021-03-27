@@ -1,6 +1,6 @@
 const {MongoClient} = require('mongodb')
 const { GoogleSpreadsheet } = require('google-spreadsheet')
-const doc = new GoogleSpreadsheet('1jQZCnQ5c1gPCAbsHGfByiIgusQ2qTNSuprOmWACIc54')
+let doc = new GoogleSpreadsheet('1jQZCnQ5c1gPCAbsHGfByiIgusQ2qTNSuprOmWACIc54')
 require('dotenv').config()
 
 const uri=process.env.DATABASE_URL
@@ -11,40 +11,62 @@ const client = new MongoClient(uri, {
 let db, cursor
 
 let test=async()=>{
+    let table='employment'
+    let cmd='add'
+    if(process.argv[2]) table=process.argv[2]
+    if(process.argv[3]) cmd=process.argv[3]
+    if(table!='employment')
+        doc = new GoogleSpreadsheet('1YCuqvWiWK6ENuXnSFEZU1bpk1HDdWGqP0D_cCm8GSFk')
     console.log("Starting...")
     try {
     let identifiers=""
     //Connect to MongoDB
     await client.connect();
     console.log("Connected to MongoDB")
-    db = client.db("employment")
-    cursor = db.collection('jobInfo').find({});
+    db = client.db(table==='employment'?'employment':'resources')
+    cursor = db.collection(table+'Info').find({});
     //Create a string of identifiers, which are just every field for a job listing combined together.
     //Used to keep track of and remove duplicates.
-    await cursor.forEach((info)=>{
-        identifiers+="IDSTART"+info.name+info.field+info.time+info.link+info.address+info.phone+info.exp+info.education+info.major+"IDEND"
+    await cursor.forEach((el)=>{
+        identifiers+="IDSTART"
+        if(table==='employment')
+            identifiers+=el.name+el.field+el.time+el.link+el.address+el.phone+el.exp+el.education+el.major
+        else if(table==='housing')
+            identifiers+=el.name+el.housing+el.phone+el.contact+el.address+el.city+el.zip+el.county+el.notes
+        else if(table==='food')
+            identifiers+=el.name+el.type+el.address+el.phone+el.city+el.zip+el.county+el.notes+el.site+el.timing
+        else
+            identifiers+=el.name+el.type+el.phone+el.other+el.address+el.city+el.zip+el.county+el.site+el.timing
+        identifiers+="IDEND"
     })
     //Sign into and load Google Sheets info
     await doc.useServiceAccountAuth(require('./credential.json'))
     await doc.loadInfo()
-    console.log("Connected to Google Sheets")
-    const rows=await doc.sheetsByIndex[0].getRows()
+    console.log("Connected to Google Sheets "+doc.title)
+    let index=0
+    if(table==='food') index=1
+    if(table==='clothing') index=2
+    const rows=await doc.sheetsByIndex[index].getRows()
+    console.log(doc.sheetsByIndex[index].title)
     let toPush=[]
+    if(cmd==='update'){
+        console.log("Removing current entries")
+        await db.collection(table+'Info').drop()
+        identifiers=""
+    }
     rows.forEach(async (el)=>{
-        //Check if any field is null, then replace.
-        if(el.Name==null) el.Name="None listed"
-        if(el.Field==null) el.Field="None listed"
-        if(el.Commitment==null) el.Commitment="None listed"
-        if(el.Link==null) el.Link="None listed"
-        if(el.Address==null) el.Address="None listed"
-        if(el.Phone==null) el.Phone="None listed"
-        if(el.Experience==null) el.Experience="None listed"
-        if(el.Education==null) el.Education="None listed"
-        if(el.Major==null) el.Major="None listed"
         let id="IDSTART"+el.Name+el.Field+el.Commitment+el.Link+el.Address+el.Phone+el.Experience+el.Education+el.Major+"IDEND"
+        if(table==='housing')
+            id="IDSTART"+el.name+el.housing+el.phone+el.contact+el.address+el.city+el.zip+el.county+el.notes+"IDEND"
+        else if(table==='food')
+            id="IDSTART"+el.name+el.type+el.address+el.phone+el.city+el.zip+el.county+el.notes+el.site+el.timing+"IDEND"
+        else if(table=='clothing')
+            id="IDSTART"+el.name+el.type+el.phone+el.other+el.address+el.city+el.zip+el.county+el.site+el.timing+"IDEND"
+        //Only push unique entries.
         if(!identifiers.includes(id)){
-            //Only push unique entries.
-            toPush.push({
+            //The structure of each object is stored in an array where the key is the name of the table.
+            let newInfo=[]
+            newInfo['employment']={
                 name: el.Name,
                 field: el.Field,
                 time: el.Commitment,
@@ -54,11 +76,48 @@ let test=async()=>{
                 exp: el.Experience,
                 education: el.Education,
                 major: el.Major
-            })
+            }
+            newInfo['housing']={
+                name: el.name,
+                housing: el.housing,
+                phone: el.phone,
+                contact: el.contact,
+                address: el.address,
+                city: el.city,
+                zip: el.zip,
+                county: el.county,
+                notes: el.notes
+            }
+            newInfo['food']={
+                name: el.name,
+                type: el.type,
+                address: el.address,
+                phone: el.phone,
+                city: el.city,
+                zip: el.zip,
+                county: el.county,
+                notes: el.notes,
+                site: el.site,
+                timing: el.timing
+            }
+            newInfo['clothing']={
+                name: el.name,
+                type: el.type,
+                phone: el.phone,
+                other: el.other,
+                address: el.address,
+                city: el.city,
+                zip: el.zip,
+                county: el.county,
+                site: el.site,
+                timing: el.timing
+            }
+            //Only push unique entries.
+            toPush.push(newInfo[table])
         }
     })
     if(toPush.length>0){
-        await db.collection('jobInfo').insertMany(toPush)
+        await db.collection(table+'Info').insertMany(toPush)
         console.log("Added:\n")
         toPush.forEach(el=>{
             console.log(el)
